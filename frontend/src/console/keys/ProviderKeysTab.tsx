@@ -11,7 +11,7 @@ import { maskKey, resolveBuildingKey, useKeys } from '@/store/keys'
 import type { ProviderKey } from '@/types'
 import { AddKeyDialog } from './AddKeyDialog'
 import { BuildingAssignments } from './BuildingAssignments'
-import { buildingName, buildingShort, fmtDate, hostOf, KEY_BUILDINGS } from './format'
+import { buildingName, buildingShort, fmtDate, hostOf, useKeyBuildings } from './format'
 import { ConfirmDialog, PixelKey, PixelLoader } from './primitives'
 
 type TestState = { phase: 'running' } | { phase: 'done'; ok: boolean; latencyMs: number }
@@ -19,6 +19,7 @@ type TestState = { phase: 'running' } | { phase: 'done'; ok: boolean; latencyMs:
 export function ProviderKeysTab() {
   const keys = useKeys((s) => s.keys)
   const buildingConfig = useKeys((s) => s.buildingConfig)
+  const ids = useKeyBuildings()
   const [addOpen, setAddOpen] = useState(false)
   const [flashId, setFlashId] = useState<string | null>(null)
   const [tests, setTests] = useState<Record<string, TestState>>({})
@@ -26,7 +27,7 @@ export function ProviderKeysTab() {
   const [delTarget, setDelTarget] = useState<ProviderKey | null>(null)
 
   const usedBy = (keyId: string) =>
-    KEY_BUILDINGS.filter((b) => resolveBuildingKey({ keys, buildingConfig }, b)?.id === keyId)
+    ids.filter((b) => resolveBuildingKey({ keys, buildingConfig }, b)?.id === keyId)
 
   async function runTest(k: ProviderKey) {
     setTests((t) => ({ ...t, [k.id]: { phase: 'running' } }))
@@ -200,7 +201,7 @@ export function ProviderKeysTab() {
               <span className="text-gg-ink">{delTarget.name}</span> ({maskKey(delTarget.key)}) will be removed from this
               browser.{' '}
               {delUsers.length > 0 &&
-                `${delUsers.length === KEY_BUILDINGS.length ? 'Every building' : delUsers.map(buildingShort).join(', ')} will ${
+                `${delUsers.length === ids.length ? 'Every building' : delUsers.map(buildingShort).join(', ')} will ${
                   remaining.length > 0 ? `switch to ${remaining[0].name}` : 'go offline'
                 }.`}
             </>

@@ -64,8 +64,10 @@ export function CityCanvas() {
         dpr={1 / PIXEL_SIZE}
         camera={{ position: CAMERA.position, zoom: CAMERA.zoom, near: CAMERA.near, far: CAMERA.far }}
         gl={{ antialias: false, powerPreference: 'high-performance', stencil: false }}
-        onCreated={({ gl }) => {
-          gl.domElement.style.imageRendering = 'pixelated'
+        onCreated={(state) => {
+          state.gl.domElement.style.imageRendering = 'pixelated'
+          // Dev-only handle for perf checks: window.__r3f.gl.info.render (calls, triangles)
+          if (import.meta.env.DEV) (window as unknown as { __r3f: typeof state }).__r3f = state
         }}
         onPointerMissed={() => {
           const s = useGrid.getState()

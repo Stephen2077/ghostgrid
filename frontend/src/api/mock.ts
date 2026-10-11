@@ -7,7 +7,6 @@ import type {
   LogEntry,
   LogLevel,
   PlatformKey,
-  PlaygroundParams,
   ProviderKey,
   RequestLog,
   TaskResult,
@@ -272,40 +271,4 @@ export async function testConnection(key: Pick<ProviderKey, 'provider' | 'baseUr
   // Mock rule: keys shorter than 8 chars or containing "bad" fail.
   const ok = key.key.length >= 8 && !key.key.includes('bad')
   return { ok, latencyMs, message: ok ? `200 OK · ${key.baseUrl || 'custom endpoint'}` : '401 Unauthorized · invalid key' }
-}
-
-// ---------- Playground ----------
-
-const PLAYGROUND_REPLIES: Record<string, string> = {
-  router:
-    'Plan:\n1. codex → implement the change on a branch\n2. security → review any shell or file-system writes\n3. router → merge results and report back\nEstimated cost: $0.04 · 3 agents · ~20s',
-  codex:
-    "Sure. Here is the patch:\n\n```ts\nexport function flightPath(from: Point, to: Point) {\n  const mid = { x: (from.x + to.x) / 2, y: Math.min(from.y, to.y) - 24 }\n  return [from, mid, to]\n}\n```\n\nBuild passes. 24/24 tests green.",
-  security:
-    'Risk review:\n- rm -rf /tmp/build → MEDIUM (outside repo, temp dir)\n- npm install → LOW (lockfile unchanged)\nVerdict: allow with human approval for the delete.',
-}
-
-export async function runPlayground(
-  agentId: BuildingId,
-  prompt: string,
-  params: PlaygroundParams,
-  onToken: (chunk: string) => void,
-  signal?: AbortSignal,
-): Promise<{ text: string; tokensIn: number; tokensOut: number; latencyMs: number }> {
-  const started = Date.now()
-  const full = PLAYGROUND_REPLIES[agentId] ?? PLAYGROUND_REPLIES.router
-  const limit = Math.min(full.length, params.maxTokens * 4)
-  const text = full.slice(0, limit)
-  await sleep(350)
-  for (let i = 0; i < text.length; i += 3) {
-    if (signal?.aborted) break
-    onToken(text.slice(i, i + 3))
-    await sleep(18)
-  }
-  return {
-    text,
-    tokensIn: Math.ceil(prompt.length / 4),
-    tokensOut: Math.ceil(text.length / 4),
-    latencyMs: Date.now() - started,
-  }
 }

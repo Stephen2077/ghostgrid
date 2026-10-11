@@ -16,7 +16,6 @@ import type {
   FlightKind,
   LogEntry,
   LogLevel,
-  PlaygroundParams,
   Session,
   Task,
 } from '../types'
@@ -72,13 +71,6 @@ interface GridState {
   removeBuilding: (id: BuildingId) => void
   updateBot: (id: BuildingId, patch: Partial<BotConfig>) => void
   renameBuilding: (id: BuildingId, name: string) => void
-  runPlayground: (
-    agentId: BuildingId,
-    prompt: string,
-    params: PlaygroundParams,
-    onToken: (chunk: string) => void,
-    signal?: AbortSignal,
-  ) => Promise<{ text: string; tokensIn: number; tokensOut: number; latencyMs: number }>
 }
 
 const MIN = 60_000
@@ -319,22 +311,6 @@ export const useGrid = create<GridState>()((set, get) => ({
   renameBuilding: (bid, name) =>
     set((s) => (s.buildings[bid] ? { buildings: { ...s.buildings, [bid]: { ...s.buildings[bid], name } } } : s)),
 
-  runPlayground: async (agentId, prompt, params, onToken, signal) => {
-    const { setStatus, pushLog } = get()
-    setStatus(agentId, 'working')
-    pushLog(agentId, 'info', `playground: "${prompt.slice(0, 60)}"`)
-    try {
-      const res = await api.runPlayground(agentId, prompt, params, onToken, signal)
-      pushLog(agentId, 'ok', `playground reply · ${res.tokensOut} tokens · ${res.latencyMs}ms`)
-      return res
-    } catch (e) {
-      setStatus(agentId, 'error')
-      pushLog(agentId, 'error', `playground failed: ${String(e)}`)
-      throw e
-    } finally {
-      if (get().buildings[agentId]?.status === 'working') setStatus(agentId, 'idle')
-    }
-  },
 }))
 
 // Last n logs for one building, oldest first. useShallow avoids a new-array re-render loop.

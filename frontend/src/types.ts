@@ -158,7 +158,3 @@ export interface BuildingConfig {
   model: string
 }
 
-export interface PlaygroundParams {
-  temperature: number // 0..2
-  maxTokens: number // 1..4096
-}

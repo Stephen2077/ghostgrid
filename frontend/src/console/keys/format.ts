@@ -1,13 +1,15 @@
 // Small formatters for the API Keys page.
-import { BUILDING_IDS, BUILDINGS } from '@/constants'
+import { BUILDINGS } from '@/constants'
+import { useGrid } from '@/store/grid'
 import type { BuildingId } from '@/types'
 
-// Agent buildings that take a provider key. Follows the default city buildings in constants.
-export const KEY_BUILDINGS: BuildingId[] = BUILDING_IDS
+// Every building in the city (defaults + player-built) takes a provider key. `order` keeps its
+// identity until a building is added or removed, so it is safe as a selector result.
+export const useKeyBuildings = (): BuildingId[] => useGrid((s) => s.order)
 
-// Defensive lookups: the building list is still changing, so never crash on an unknown id.
-export const buildingShort = (b: BuildingId) => BUILDINGS[b]?.short ?? b.toUpperCase()
-export const buildingName = (b: BuildingId) => BUILDINGS[b]?.name ?? b
+// Defensive lookups: never crash on an unknown id.
+export const buildingShort = (b: BuildingId) => useGrid.getState().buildings[b]?.short ?? BUILDINGS[b]?.short ?? b.toUpperCase()
+export const buildingName = (b: BuildingId) => useGrid.getState().buildings[b]?.name ?? BUILDINGS[b]?.name ?? b
 
 export const fmtDate = (ts: number) =>
   new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })

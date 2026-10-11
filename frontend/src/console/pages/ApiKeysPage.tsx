@@ -2,7 +2,7 @@
 import { Ghost, KeyRound } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { resolveBuildingKey, useKeys } from '@/store/keys'
-import { KEY_BUILDINGS } from '../keys/format'
+import { useKeyBuildings } from '../keys/format'
 import { PlatformKeysTab } from '../keys/PlatformKeysTab'
 import { ProviderKeysTab } from '../keys/ProviderKeysTab'
 import { PageHeader } from '../PageHeader'
@@ -39,13 +39,14 @@ export function ApiKeysPage() {
 
 // "2/3 ONLINE": how many buildings have a usable key. Selector returns a number, so no re-render loop.
 function CityOnline() {
-  const online = useKeys((s) => KEY_BUILDINGS.filter((b) => resolveBuildingKey(s, b) !== null).length)
-  const total = KEY_BUILDINGS.length
+  const ids = useKeyBuildings()
+  const online = useKeys((s) => ids.filter((b) => resolveBuildingKey(s, b) !== null).length)
+  const total = ids.length
   const color = online === 0 ? 'var(--gg-grey)' : online === total ? 'var(--gg-green)' : 'var(--gg-yellow)'
   return (
     <div className="flex shrink-0 items-center gap-3 border-2 px-3 py-2" style={{ borderColor: color }}>
       <span className="flex gap-1" aria-hidden>
-        {KEY_BUILDINGS.map((b, i) => (
+        {ids.map((b, i) => (
           <span key={b} className="block size-2" style={{ background: i < online ? color : 'var(--gg-haze)' }} />
         ))}
       </span>

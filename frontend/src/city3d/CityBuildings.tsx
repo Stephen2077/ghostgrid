@@ -11,7 +11,7 @@ import { SecurityCheckpoint } from './buildings/SecurityCheckpoint'
 import { BuildingShell } from './BuildingShell'
 
 const ART: Record<BuildingType, ComponentType> = {
-  router: RouterSpire,
+  router: RouterSpire, // alternative: RouterSpireImg (img2threejs CN-Tower-style model)
   codex: CodexTower,
   claude: ClaudeNexus,
   deepseek: DeepSeekForge,

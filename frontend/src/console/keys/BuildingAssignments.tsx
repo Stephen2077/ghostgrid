@@ -6,10 +6,11 @@ import { BUILDINGS, PROVIDERS, STATUS_COLOR } from '@/constants'
 import { useGrid } from '@/store/grid'
 import { maskKey, resolveBuildingKey, useKeys } from '@/store/keys'
 import type { BuildingId } from '@/types'
-import { buildingName, buildingShort, KEY_BUILDINGS } from './format'
+import { buildingName, buildingShort, useKeyBuildings } from './format'
 import { PixelSelect } from './primitives'
 
 export function BuildingAssignments() {
+  const ids = useKeyBuildings()
   return (
     <Card className="py-0">
       <CardHeader className="border-b pt-4">
@@ -27,7 +28,7 @@ export function BuildingAssignments() {
             </span>
           ))}
         </div>
-        {KEY_BUILDINGS.map((b) => (
+        {ids.map((b) => (
           <AssignmentRow key={b} id={b} />
         ))}
       </CardContent>
@@ -38,7 +39,8 @@ export function BuildingAssignments() {
 function AssignmentRow({ id }: { id: BuildingId }) {
   const keys = useKeys((s) => s.keys)
   const buildingConfig = useKeys((s) => s.buildingConfig)
-  const config = buildingConfig[id] ?? { keyId: null, model: BUILDINGS[id]?.model ?? '' }
+  const defaultModel = useGrid((s) => s.buildings[id]?.model) ?? BUILDINGS[id]?.model ?? ''
+  const config = buildingConfig[id] ?? { keyId: null, model: defaultModel }
   const gridStatus = useGrid((s) => s.buildings[id]?.status ?? 'idle')
 
   const resolved = resolveBuildingKey({ keys, buildingConfig }, id)

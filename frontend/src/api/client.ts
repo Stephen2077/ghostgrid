@@ -3,7 +3,7 @@
 // which provider key / base URL / model the building is configured to use (getApiConfig).
 import { BUILDINGS } from '../constants'
 import { resolveBuildingKey, useKeys } from '../store/keys'
-import type { BuildingId, PlaygroundParams, Provider, ProviderKey, RequestLog } from '../types'
+import type { BuildingId, Provider, ProviderKey, RequestLog } from '../types'
 import * as mock from './mock'
 
 export interface ApiConfig {
@@ -69,11 +69,4 @@ export const api = {
   createPlatformKey: mock.createPlatformKey,
   revokePlatformKey: mock.revokePlatformKey,
   testConnection: (key: Pick<ProviderKey, 'provider' | 'baseUrl' | 'key'>) => mock.testConnection(key),
-  async runPlayground(agentId: BuildingId, prompt: string, params: PlaygroundParams, onToken: (chunk: string) => void, signal?: AbortSignal) {
-    const started = Date.now()
-    const cfg = getApiConfig(agentId)
-    const res = await mock.runPlayground(agentId, prompt, params, onToken, signal)
-    record(agentId, 'POST', `/v1/agents/${agentId}/run`, 200, started, { model: cfg.model, input: prompt, ...params }, { output: res.text }, res.tokensIn, res.tokensOut)
-    return res
-  },
 }

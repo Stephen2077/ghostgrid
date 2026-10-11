@@ -170,7 +170,7 @@ export function CameraRig() {
   // Keyboard: Q / E turn, R reset. Ignored while typing or with modifier keys (Cmd+R must still reload).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || isTyping(e.target)) return
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || isTyping(e.target) || isTyping(document.activeElement)) return
       const k = e.key.toLowerCase()
       if (k === 'q') turn(1)
       else if (k === 'e') turn(-1)
