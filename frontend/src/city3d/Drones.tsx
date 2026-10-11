@@ -3,11 +3,13 @@
 // drone, packet and smoke puff), built once in useMemo. One useFrame reads the store with
 // useGrid.getState() (no React re-render), composes instance matrices with module-level scratch
 // objects (no per-frame allocations) and sets mesh.count. No React state anywhere.
+// Trails: one ribbon Mesh per flight pool slot (≤ 8 extra draw calls, hidden while the slot is idle),
+// built from a fixed ring buffer of recent positions by mutating typed arrays in the same useFrame.
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 import { useGrid } from '../store/grid'
-import type { Building } from '../types'
+import type { Building, Flight } from '../types'
 import { flatMat, neonMat, PALETTE, UNIT_BOX } from './materials'
 import { dockPoint } from './world'
 
@@ -29,6 +31,14 @@ const SMOKE_RISE = 0.55 // units/s
 const ARC_PEAK = 2.5 // arc peak above the higher dock point
 const PARK_LIFT = 1.0 // parked drone hovers this far above the router dock (clear of the DOM label)
 const ROTOR_SPEED = 40 // rad/s
+const TRAIL_LIFE = 0.4 // s: a trail sample fades out over this long
+const TRAIL_DT = 0.015 // s between frozen samples (just under a 60 Hz frame) → tail length is frame-rate independent
+const TRAIL_N = Math.ceil(TRAIL_LIFE / TRAIL_DT) + 2 // ring samples per slot: live head + TRAIL_LIFE of frozen samples
+const TRAIL_MIN_W = 0.12 // world units: thinnest width that survives the 1/3-res pixel pass
+const TRAIL_GLOW = 2 // head brightness (additive, picked up by bloom)
+const C_CYAN = new THREE.Color(PALETTE.cyan)
+const C_GREEN = new THREE.Color(PALETTE.green)
+const C_YELLOW = new THREE.Color(PALETTE.yellow)
 
 // ---------- part transforms (drone local space: +x = nose, body centered at origin) ----------
 const Y_AXIS = new THREE.Vector3(0, 1, 0)
@@ -67,6 +77,11 @@ const _p = new THREE.Vector3()
 const _s = new THREE.Vector3()
 const _A = new THREE.Vector3()
 const _B = new THREE.Vector3()
+const _V = new THREE.Vector3() // camera view direction (trail ribbons face the camera)
+const _T = new THREE.Vector3()
+const _S = new THREE.Vector3()
+const PTS = new Float32Array(TRAIL_N * 3) // visible trail samples, newest → oldest
+const AGE = new Float32Array(TRAIL_N) // their age / TRAIL_LIFE
 
 type Vec3 = [number, number, number]
 const dockCache = new WeakMap<Building, Vec3>()
@@ -102,10 +117,41 @@ interface Rig {
   smoke: THREE.InstancedMesh
   all: THREE.InstancedMesh[]
   ghostMat: THREE.MeshBasicMaterial
+  trails: Trail[] // [0, FLIGHT_DRONES) drone slots, then PACKETS packet slots
+  trailMat: THREE.MeshBasicMaterial
   puffs: { x: Float32Array; y: Float32Array; z: Float32Array; age: Float32Array; next: number; timer: number }
   emit: THREE.Vector3
   warm: number // first frames: draw everything once so all shaders compile up front (no hitch mid-demo)
   reduced: boolean
+}
+
+interface Trail {
+  mesh: THREE.Mesh // ribbon: 2 vertices per sample, ONE draw call
+  pos: THREE.BufferAttribute
+  col: THREE.BufferAttribute
+  ring: Float32Array // TRAIL_N recent positions (xyz); ring[head] follows the flier
+  time: Float64Array // when each sample was last written
+  head: number
+  n: number // samples in use (0 = cleared)
+  opened: number // when the head sample was opened
+  id: string // flight that owns this slot ('' = never used)
+  live: boolean // written this frame
+}
+
+function createTrail(mat: THREE.Material): Trail {
+  const g = new THREE.BufferGeometry()
+  const pos = new THREE.BufferAttribute(new Float32Array(TRAIL_N * 6), 3).setUsage(THREE.DynamicDrawUsage)
+  const col = new THREE.BufferAttribute(new Float32Array(TRAIL_N * 6), 3).setUsage(THREE.DynamicDrawUsage)
+  const idx = new Uint16Array((TRAIL_N - 1) * 6) // quad j joins samples j and j + 1
+  for (let j = 0; j < TRAIL_N - 1; j++) idx.set([2 * j, 2 * j + 1, 2 * j + 2, 2 * j + 1, 2 * j + 3, 2 * j + 2], j * 6)
+  g.setIndex(new THREE.BufferAttribute(idx, 1))
+  g.setAttribute('position', pos)
+  g.setAttribute('color', col)
+  g.setDrawRange(0, 0)
+  const mesh = new THREE.Mesh(g, mat)
+  mesh.frustumCulled = false // vertices move every frame
+  mesh.visible = false
+  return { mesh, pos, col, ring: new Float32Array(TRAIL_N * 3), time: new Float64Array(TRAIL_N), head: 0, n: 0, opened: 0, id: '', live: false }
 }
 
 function inst(mat: THREE.Material, max: number) {
@@ -123,6 +169,14 @@ function createRig(): Rig {
     depthWrite: false,
     toneMapped: false,
   })
+  const trailMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, // per-vertex color × fade (additive → dimmer reads as lower opacity)
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  })
   const r = {
     body: inst(flatMat(PALETTE.steel), MAX_DRONES),
     arms: inst(flatMat(PALETTE.haze), MAX_DRONES * 2),
@@ -135,6 +189,8 @@ function createRig(): Rig {
     ghost: inst(ghostMat, PACKETS * GHOSTS),
     smoke: inst(flatMat(PALETTE.grey), SMOKE),
     ghostMat,
+    trails: Array.from({ length: FLIGHT_DRONES + PACKETS }, () => createTrail(trailMat)),
+    trailMat,
     puffs: {
       x: new Float32Array(SMOKE),
       y: new Float32Array(SMOKE),
@@ -186,8 +242,77 @@ function commit(m: THREE.InstancedMesh, n: number, warm: boolean) {
   if (n > 0) m.instanceMatrix.needsUpdate = true
 }
 
-function update(r: Rig, t: number, dt: number) {
+// Stable trail slot per flight id (slots must not shuffle when an earlier flight lands, or trails would jump).
+// A new flight takes a slot no current flight owns, and that slot's ring is cleared.
+function trailSlot(r: Rig, id: string, lo: number, hi: number, flights: readonly Flight[]): Trail | null {
+  for (let i = lo; i < hi; i++) if (r.trails[i].id === id) return r.trails[i]
+  free: for (let i = lo; i < hi; i++) {
+    const tr = r.trails[i]
+    for (let j = 0; j < flights.length; j++) if (flights[j].id === tr.id) continue free
+    tr.id = id
+    tr.n = 0
+    return tr
+  }
+  return null
+}
+
+// The ring's head sample follows (x, y, z); a new head opens every TRAIL_DT, so the ring spans ~TRAIL_LIFE.
+// Each sample younger than TRAIL_LIFE becomes 2 vertices offset sideways (camera-facing), fading and thinning
+// with age. Only typed arrays are written (no allocations).
+function writeTrail(tr: Trail, x: number, y: number, z: number, t: number, c: THREE.Color, w0: number) {
+  tr.live = true
+  if (tr.n === 0 || t - tr.opened >= TRAIL_DT) {
+    tr.head = (tr.head + 1) % TRAIL_N
+    tr.opened = t
+    if (tr.n < TRAIL_N) tr.n++
+  }
+  const h = tr.head
+  tr.ring[h * 3] = x
+  tr.ring[h * 3 + 1] = y
+  tr.ring[h * 3 + 2] = z
+  tr.time[h] = t
+  let m = 0
+  for (let j = 0, i = h; j < tr.n; j++, i = (i + TRAIL_N - 1) % TRAIL_N) {
+    const age = t - tr.time[i]
+    if (age >= TRAIL_LIFE) break
+    PTS[m * 3] = tr.ring[i * 3]
+    PTS[m * 3 + 1] = tr.ring[i * 3 + 1]
+    PTS[m * 3 + 2] = tr.ring[i * 3 + 2]
+    AGE[m++] = age / TRAIL_LIFE
+  }
+  const P = tr.pos.array as Float32Array
+  const C = tr.col.array as Float32Array
+  _S.set(0, 0, 0)
+  for (let j = 0; j < m; j++) {
+    const a = (j > 0 ? j - 1 : j) * 3
+    const b = (j < m - 1 ? j + 1 : j) * 3
+    _T.set(PTS[a] - PTS[b], PTS[a + 1] - PTS[b + 1], PTS[a + 2] - PTS[b + 2]).cross(_V)
+    const len = _T.length()
+    if (len > 1e-6) _S.copy(_T).divideScalar(len) // else keep the previous side (samples coincide)
+    const u = AGE[j]
+    const hw = 0.5 * (TRAIL_MIN_W + (w0 - TRAIL_MIN_W) * (1 - u))
+    const f = TRAIL_GLOW * (1 - u)
+    const k = j * 3
+    const o = j * 6
+    P[o] = PTS[k] + _S.x * hw
+    P[o + 1] = PTS[k + 1] + _S.y * hw
+    P[o + 2] = PTS[k + 2] + _S.z * hw
+    P[o + 3] = PTS[k] - _S.x * hw
+    P[o + 4] = PTS[k + 1] - _S.y * hw
+    P[o + 5] = PTS[k + 2] - _S.z * hw
+    C[o] = C[o + 3] = c.r * f
+    C[o + 1] = C[o + 4] = c.g * f
+    C[o + 2] = C[o + 5] = c.b * f
+  }
+  tr.mesh.geometry.setDrawRange(0, Math.max(0, m - 1) * 6)
+  tr.pos.needsUpdate = true
+  tr.col.needsUpdate = true
+}
+
+function update(r: Rig, t: number, dt: number, cam: THREE.Camera) {
   const s = useGrid.getState()
+  cam.getWorldDirection(_V)
+  for (let i = 0; i < r.trails.length; i++) r.trails[i].live = false
   const now = Date.now()
   const tm = r.reduced ? 0 : t // ambient loops freeze with prefers-reduced-motion; flights still move
   const rejected = s.task?.phase === 'rejected'
@@ -212,6 +337,8 @@ function update(r: Rig, t: number, dt: number) {
         arc(a, b, ease(clamp01(p - GHOST_LAG * (g + 1))), _B)
         writeBox(r.ghost, np * GHOSTS + g, _B.x, _B.y, _B.z, GHOST_SIZE[g])
       }
+      const tp = trailSlot(r, f.id, FLIGHT_DRONES, FLIGHT_DRONES + PACKETS, s.flights)
+      if (tp) writeTrail(tp, _A.x, _A.y, _A.z, t, C_YELLOW, 0.16)
       np++
       continue
     }
@@ -223,6 +350,8 @@ function update(r: Rig, t: number, dt: number) {
     const yaw = dx || dz ? Math.atan2(-dz, dx) : 0 // local +x (nose) → travel direction
     writeDrone(r, nd, _A.x, _A.y, _A.z, yaw, -0.3 * easeSpeed(p), tm * ROTOR_SPEED + nd * 1.3, true)
     if (f.kind === 'drone-cargo') writeCargo(r, nc++)
+    const tr = trailSlot(r, f.id, 0, FLIGHT_DRONES, s.flights)
+    if (tr) writeTrail(tr, _A.x, _A.y, _A.z, t, f.kind === 'drone-cargo' ? C_GREEN : C_CYAN, 0.24)
     if (f.kind === 'drone' && rejected && p < 1) {
       smokeOn = true
       r.emit.set(_A.x - Math.cos(yaw) * 0.3, _A.y, _A.z + Math.sin(yaw) * 0.3) // just behind the tail
@@ -284,6 +413,11 @@ function update(r: Rig, t: number, dt: number) {
   commit(r.packet, np, warm)
   commit(r.ghost, np * GHOSTS, warm)
   commit(r.smoke, ns, warm)
+  for (let i = 0; i < r.trails.length; i++) {
+    const tr = r.trails[i]
+    if (!tr.live) tr.mesh.geometry.setDrawRange(0, 0) // idle slot: hidden (warm frames still compile the shader)
+    tr.mesh.visible = tr.live || warm
+  }
 }
 
 export function Drones() {
@@ -292,14 +426,19 @@ export function Drones() {
     () => () => {
       for (const m of rig.all) m.dispose() // frees instance buffers; UNIT_BOX + cached materials stay shared
       rig.ghostMat.dispose()
+      for (const tr of rig.trails) tr.mesh.geometry.dispose()
+      rig.trailMat.dispose()
     },
     [rig],
   )
-  useFrame((state, delta) => update(rig, state.clock.elapsedTime, Math.min(delta, 0.1)))
+  useFrame((state, delta) => update(rig, state.clock.elapsedTime, Math.min(delta, 0.1), state.camera))
   return (
     <group>
       {rig.all.map((m) => (
         <primitive key={m.uuid} object={m} />
+      ))}
+      {rig.trails.map((tr) => (
+        <primitive key={tr.mesh.uuid} object={tr.mesh} />
       ))}
     </group>
   )

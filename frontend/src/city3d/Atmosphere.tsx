@@ -1,11 +1,11 @@
-// Night mood around the floating city: pixel sky, stars, distant city, rain, holo billboards, flying cars.
-// Budget: 9 draw calls (sky bg, stars, city, rain, 3 signs, sign frames, cars). Nothing allocates per frame:
-// stars + rain animate on the GPU (one uniform each), cars/frames mutate instance buffers in useFrame.
+// Night mood around the floating city: pixel sky, stars, distant city, rain, specks, holo billboards, flying cars.
+// Budget: 10 draw calls (sky bg, stars, city, rain, specks, 3 signs, sign frames, cars). Nothing allocates per
+// frame: stars + rain animate on the GPU (one uniform each), cars/frames/specks mutate buffers in useFrame.
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { PALETTE, UNIT_BOX, signTexture } from './materials'
-import { CAMERA, MAP } from './world'
+import { PALETTE, UNIT_BOX } from './materials'
+import { CAMERA, MAP, PIXEL_SIZE } from './world'
 
 const REDUCED =
   typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -37,12 +37,19 @@ function nearestTex(c: HTMLCanvasElement) {
 }
 
 // ---------- layout (screen-space, see ISO_Q) ----------
-const TEXEL = 0.09 // world units per sign texel ≈ 1 render pixel at zoom 34
+// Signs sit in open sky beside the platform, clear of the DOM HUD (TopNav, BuildMenu, CommandBar, 380px
+// SidePanel) and of the building labels at the default camera on 1440×900 and 1193×687: upper-left (between
+// BuildMenu and the DeepSeek label), upper-right (left of the SidePanel), lower-left (under the BuildMenu).
+// t = world units per texel (≈ 1 render px at zoom 42). k is chosen so the ±6° idle sway barely moves them.
 const SIGNS = [
-  { text: 'GHOSTGRID', color: PALETTE.pink, sx: -2.5, sy: 10, k: -6 },
-  { text: 'AGENTS ONLINE', color: PALETTE.cyan, sx: -14.5, sy: 5.6, k: -2 },
-  { text: 'BUILD YOUR CITY', color: PALETTE.pink, sx: 9.5, sy: -7.6, k: 4 },
-].map((s) => ({ ...s, hw: ((s.text.length * 8 + 8) * TEXEL) / 2, hh: 8 * TEXEL }))
+  { lines: ['GHOSTGRID'], color: PALETTE.pink, t: 0.075, sx: -6.9, sy: 8, k: -4 },
+  { lines: ['AGENTS', 'ONLINE'], color: PALETTE.cyan, t: 0.065, sx: 4.6, sy: 7.6, k: 0 },
+  { lines: ['BUILD', 'YOUR', 'CITY'], color: PALETTE.pink, t: 0.07, sx: -14.4, sy: -4.6, k: -2.6 },
+].map((s) => {
+  const texW = Math.max(...s.lines.map((l) => l.length)) * 8 + 8 // see holoTexture
+  const texH = s.lines.length * 11 + 5
+  return { ...s, text: s.lines.join(' '), hw: (texW * s.t) / 2, hh: (texH * s.t) / 2 }
+})
 
 // Flying-car lanes (world space, along x).
 const LANES = [
@@ -219,10 +226,10 @@ function layoutCity(count: number): CityBox[] {
     // In front of the platform: stay below its lower silhouette.
     const ax = Math.max(0, Math.abs(sx) - hwS)
     if (x * VIEW.x + z * VIEW.z > 0 && ax < P_SIDE_SX + 0.5) maxTop = Math.min(maxTop, topFor(platformFloor(ax) - 0.5))
-    // Never cover a billboard from in front.
+    // Never cover a billboard from in front; sky signs (sy > 0) also get clear sky behind them.
     for (const s of SIGNS) {
       const overlap = Math.abs(sx - s.sx) < hwS + s.hw + 0.3
-      if (overlap && kOf(-6 + h) > s.k) maxTop = Math.min(maxTop, topFor(s.sy - s.hh - 0.4))
+      if (overlap && (s.sy > 0 || kOf(-6 + h) > s.k)) maxTop = Math.min(maxTop, topFor(s.sy - s.hh - 0.4))
     }
     // Keep the car lanes clear.
     for (const l of LANES) if (Math.abs(z - l.z) < d / 2 + 0.9) maxTop = Math.min(maxTop, l.y - 0.7)
@@ -288,7 +295,7 @@ function DistantCity() {
 }
 
 // ---------- rain (GPU fall, one line segment per drop) ----------
-const RAIN = { n: 600, half: 10, bottom: -2, span: 16, fall: 11, len: 0.55 }
+const RAIN = { n: 390, half: 10, bottom: -2, span: 16, fall: 11, len: 0.55 }
 const RAIN_VS = /* glsl */ `
 uniform float uTime;
 uniform float uSpan;
@@ -343,7 +350,7 @@ function Rain() {
         uBottom: { value: RAIN.bottom },
         uLen: { value: RAIN.len },
         uSlant: { value: new THREE.Vector3(0.09, 0, -0.09) }, // leans to screen-right
-        uOpacity: { value: 0.32 },
+        uOpacity: { value: 0.19 },
       },
       vertexShader: RAIN_VS,
       fragmentShader: RAIN_FS,
@@ -363,8 +370,80 @@ function Rain() {
   return <lineSegments geometry={geo} material={mat} frustumCulled={false} />
 }
 
+// ---------- floating specks (1 Points; drift mutates one Float32Array in useFrame) ----------
+const SPECKS = { n: 120, half: 9, top: 8 }
+
+function Specks() {
+  const { geo, mat, attr, drift } = useMemo(() => {
+    const r = rng(77)
+    const pos = new Float32Array(SPECKS.n * 3)
+    const col = new Float32Array(SPECKS.n * 3)
+    const drift = new Float32Array(SPECKS.n * 3) // base x, rise speed, wobble phase
+    const palette = [PALETTE.cyan, PALETTE.pink, PALETTE.green]
+    const c = new THREE.Color()
+    for (let i = 0; i < SPECKS.n; i++) {
+      const x = (r() * 2 - 1) * SPECKS.half
+      pos.set([x, r() * SPECKS.top, (r() * 2 - 1) * SPECKS.half], i * 3)
+      drift.set([x, 0.15 + r() * 0.3, r() * 6.283], i * 3)
+      c.set(palette[i % palette.length])
+      col.set([c.r, c.g, c.b], i * 3)
+    }
+    const attr = new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage)
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', attr)
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+    const mat = new THREE.PointsMaterial({
+      size: PIXEL_SIZE, // CSS px × pixelRatio (1/PIXEL_SIZE) → 1 render pixel
+      sizeAttenuation: false,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.45,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+      fog: false,
+    })
+    return { geo, mat, attr, drift }
+  }, [])
+  useEffect(() => () => {
+    geo.dispose()
+    mat.dispose()
+  }, [geo, mat])
+  useFrame(({ clock }, dt) => {
+    if (REDUCED) return
+    const pos = attr.array as Float32Array
+    const t = clock.elapsedTime
+    const step = Math.min(dt, 0.1) // no jump after a background tab
+    for (let o = 0; o < pos.length; o += 3) {
+      const y = pos[o + 1] + drift[o + 1] * step
+      pos[o + 1] = y > SPECKS.top ? y - SPECKS.top : y
+      pos[o] = drift[o] + Math.sin(t * 0.4 + drift[o + 2]) * 0.25
+    }
+    attr.needsUpdate = true
+  })
+  return <points geometry={geo} material={mat} frustumCulled={false} />
+}
+
 // ---------- holographic billboards ----------
 const SIGN_BG = 'rgba(26,16,64,0.6)'
+
+// Multi-line pixel-font sign: 8px glyphs, 3px line gap, 4px padding (size matches SIGNS texW/texH).
+function holoTexture(lines: string[], color: string) {
+  const font = '8px "Press Start 2P", monospace'
+  const c = document.createElement('canvas')
+  const g = c.getContext('2d')!
+  g.font = font
+  const widths = lines.map((l) => Math.ceil(g.measureText(l).width))
+  c.width = Math.max(16, ...widths) + 8
+  c.height = lines.length * 11 + 5
+  g.fillStyle = SIGN_BG // resizing the canvas reset the context state
+  g.fillRect(0, 0, c.width, c.height)
+  g.fillStyle = color
+  g.font = font
+  g.textBaseline = 'middle'
+  lines.forEach((l, i) => g.fillText(l, Math.round((c.width - widths[i]) / 2), 9 + i * 11))
+  return nearestTex(c)
+}
 const UNIT_PLANE = new THREE.PlaneGeometry(1, 1)
 const FRAME_T = 0.14
 const FRAME_PAD = 0.12
@@ -382,8 +461,8 @@ function Billboards() {
   const signs = useMemo(
     () =>
       SIGNS.map((s) => {
-        const tex = signTexture(s.text, s.color, SIGN_BG)
-        const w = (tex.image as HTMLCanvasElement).width * TEXEL
+        const tex = holoTexture(s.lines, s.color)
+        const img = tex.image as HTMLCanvasElement
         const mat = new THREE.MeshBasicMaterial({
           map: tex,
           color: new THREE.Color(1.9, 1.9, 1.9),
@@ -392,13 +471,16 @@ function Billboards() {
           toneMapped: false,
           fog: false,
         })
-        return { ...s, w, h: 16 * TEXEL, mat, neon: new THREE.Color(s.color).multiplyScalar(2.4) }
+        return { ...s, w: img.width * s.t, h: img.height * s.t, mat, neon: new THREE.Color(s.color).multiplyScalar(2.4) }
       }),
     [],
   )
   const frameMat = useMemo(() => new THREE.MeshBasicMaterial({ toneMapped: false, fog: false }), [])
   useEffect(() => () => {
-    signs.forEach((s) => s.mat.dispose()) // textures are shared (signTexture cache)
+    signs.forEach((s) => {
+      s.mat.map?.dispose()
+      s.mat.dispose()
+    })
     frameMat.dispose()
   }, [signs, frameMat])
 
@@ -518,6 +600,7 @@ export function Atmosphere() {
       <Sky />
       <DistantCity />
       <Rain />
+      <Specks />
       <FlyingCars />
       <group quaternion={ISO_Q}>
         <Stars />

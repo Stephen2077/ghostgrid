@@ -14,9 +14,9 @@ const HOME_AZ = 45 * DEG // default azimuth: camera on +x/+z (see CAMERA.positio
 const HOME_POLAR = 60 * DEG // elevation 30° = 60° from vertical → 2:1 dimetric
 const HUD_TOP = 72 // CSS px kept free for the TopNav
 const HUD_BOTTOM = 120 // CSS px kept free for the CommandBar
-const IDLE_S = 4 // seconds without input before the sway starts
-const SWAY = 6 * DEG
-const SWAY_PERIOD = 16 // seconds
+const IDLE_S = 3 // seconds without input before the sway starts
+const SWAY = 12 * DEG
+const SWAY_PERIOD = 24 // seconds
 const SWAY_FADE_IN = 3 // seconds
 const TURN_S = 0.6 // Q / E / reset animation
 const DRAG_PX = 5 // pointer travel (CSS px) after which a press is a drag, not a click
@@ -266,7 +266,7 @@ export function CameraRig() {
       return
     }
 
-    // (3) Idle sway: ease onto a ±6° sine around the nearest iso angle (or around the player's own
+    // (3) Idle sway: ease onto a ±12° sine around the nearest iso angle (or around the player's own
     // angle when they turned far away from it). Stops on any input; the camera stays where it is.
     if (reducedMotion || dragging.current || now - lastInput.current < IDLE_S) return
     let s = sway.current

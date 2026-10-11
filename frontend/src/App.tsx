@@ -1,11 +1,14 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { CityPage } from './city/CityPage'
-import { DashboardLayout } from './console/ConsoleLayout'
-import { AgentDetailPage } from './console/pages/AgentDetailPage'
-import { AgentsPage } from './console/pages/AgentsPage'
-import { ApiKeysPage } from './console/pages/ApiKeysPage'
-import { OverviewPage } from './console/pages/OverviewPage'
-import { RequestLogsPage } from './console/pages/RequestLogsPage'
+
+// The dashboard (and recharts) loads on demand so the city's first load stays small.
+const DashboardLayout = lazy(() => import('./console/ConsoleLayout').then((m) => ({ default: m.DashboardLayout })))
+const OverviewPage = lazy(() => import('./console/pages/OverviewPage').then((m) => ({ default: m.OverviewPage })))
+const AgentsPage = lazy(() => import('./console/pages/AgentsPage').then((m) => ({ default: m.AgentsPage })))
+const AgentDetailPage = lazy(() => import('./console/pages/AgentDetailPage').then((m) => ({ default: m.AgentDetailPage })))
+const RequestLogsPage = lazy(() => import('./console/pages/RequestLogsPage').then((m) => ({ default: m.RequestLogsPage })))
+const ApiKeysPage = lazy(() => import('./console/pages/ApiKeysPage').then((m) => ({ default: m.ApiKeysPage })))
 
 // Old /console links (still used in some city panels) land on the matching dashboard page.
 const CONSOLE_TO_DASHBOARD: Record<string, string> = { agents: 'agents', logs: 'activity', keys: 'keys' }
@@ -20,18 +23,20 @@ function ConsoleRedirect() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<CityPage />} />
-        <Route path="/dashboard" element={<DashboardLayout />}>
-          <Route index element={<OverviewPage />} />
-          <Route path="agents" element={<AgentsPage />} />
-          <Route path="agents/:agentId" element={<AgentDetailPage />} />
-          <Route path="activity" element={<RequestLogsPage />} />
-          <Route path="keys" element={<ApiKeysPage />} />
-        </Route>
-        <Route path="/console/*" element={<ConsoleRedirect />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={<div className="h-full bg-gg-void" />}>
+        <Routes>
+          <Route path="/" element={<CityPage />} />
+          <Route path="/dashboard" element={<DashboardLayout />}>
+            <Route index element={<OverviewPage />} />
+            <Route path="agents" element={<AgentsPage />} />
+            <Route path="agents/:agentId" element={<AgentDetailPage />} />
+            <Route path="activity" element={<RequestLogsPage />} />
+            <Route path="keys" element={<ApiKeysPage />} />
+          </Route>
+          <Route path="/console/*" element={<ConsoleRedirect />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }

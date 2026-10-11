@@ -59,9 +59,10 @@ export function BuildingShell({ building, children }: { building: Building; chil
 
   // name plate anchor (rendered as DOM by Labels.tsx)
   useEffect(() => {
-    setLabelAnchor(building.id, x, height + 1.35, z)
+    // The spire's label goes above its halo so it does not sit on the building behind it.
+    setLabelAnchor(building.id, x, height + (building.type === 'router' ? 3.3 : 1.35), z)
     return () => removeLabelAnchor(building.id)
-  }, [building.id, x, z, height])
+  }, [building.id, building.type, x, z, height])
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime
